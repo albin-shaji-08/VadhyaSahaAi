@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Audio Stream WebSocket Demo</title>
+</head>
+<body>
+    <h1>Real-Time Audio Transcription</h1>
+    <button id="start">Start Recording</button>
+    <button id="stop" disabled>Stop Recording</button>
+    <div id="transcription"></div>
+    <div id="entities" style="display: flex; gap: 2em; margin-top: 1em;"></div>
+    <div id="suggestions" style="display: flex; gap: 2em; margin-top: 1em;"></div>
+    <script>
+    // Modular, scalable continuous audio streaming
+    class AudioStreamer {
+        constructor(wsUrl, onTranscription) {
+            this.wsUrl = wsUrl;
+            this.onTranscription = onTranscription;
+            this.ws = null;
+            this.mediaRecorder = null;
+            this.isRecording = false;
+        }
+
+        async start() {
+            this.ws = new WebSocket(this.wsUrl);
+            this.ws.binaryType = 'arraybuffer';
+            this.ws.onopen = () => {
+                console.log('WebSocket connection opened');
+            };
+            this.ws.onmessage = (event) => {
+                console.log('Received from backend:', event.data);
+                let data = event.data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (e) {
+                    // fallback to plain text
+                }
+                if (this.onTranscription) this.onTranscription(data);
+                this.ws.close();
+            };
+            this.ws.onerror = (event) => {
+                console.error('WebSocket error:', event);
+            };
+            this.ws.onclose = (event) => {
+                console.log('WebSocket closed:', event);
+            };
+
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            let mimeType = 'audio/webm;codecs=opus';
+            if (!MediaRecorder.isTypeSupported(mimeType)) {
+                mimeType = 'audio/webm';
+            }
+            this.mediaRecorder = new MediaRecorder(stream, { mimeType });
+            this.mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0 && this.ws.readyState === WebSocket.OPEN) {
+                    e.data.arrayBuffer().then(buffer => {
+                        this.ws.send(buffer);
+                        console.log('Sent audio chunk of size:', buffer.byteLength);
+                    });
+                }
+            };
+            this.mediaRecorder.onstop = () => {
+                // Send special end message
+                if (this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({type: 'end'}));
+                    console.log('Sent END message');
+                }
+                this.isRecording = false;
+            };
+            this.mediaRecorder.start(250); // Stream every 250ms
+            this.isRecording = true;
+        }
+
+        stop() {
+            if (this.mediaRecorder && this.isRecording) {
+                this.mediaRecorder.stop();
+            }
+        }
+    }
+
+    // UI logic
+    const startBtn = document.getElementById('start');
+    const stopBtn = document.getElementById('stop');
+    const transcriptionDiv = document.getElementById('transcription');
+    const entitiesDiv = document.getElementById('entities');
+    const suggestionsDiv = document.getElementById('suggestions');
+    let streamer = null;
+
+
+    startBtn.onclick = async () => {
+        transcriptionDiv.innerText = "";
+        entitiesDiv.innerHTML = "";
+        suggestionsDiv.innerHTML = "";
+        streamer = new AudioStreamer('ws://localhost:8000/ws/audio', (data) => {
+            if (typeof data === 'string') {
+                transcriptionDiv.innerText = data || 'No transcription received.';
+                entitiesDiv.innerHTML = "";
+                suggestionsDiv.innerHTML = "";
+            } else {
+                transcriptionDiv.innerText = data.transcript || 'No transcription received.';
+                if (data.entities) {
+                    entitiesDiv.innerHTML = `
+                        <div><strong>Diseases</strong><br>${(data.entities.diseases || []).join('<br>') || '-'}</div>
+                        <div><strong>Drugs</strong><br>${(data.entities.drugs || []).join('<br>') || '-'}</div>
+                        <div><strong>Symptoms</strong><br>${(data.entities.symptoms || []).join('<br>') || '-'}</div>
+                    `;
+                } else {
+                    entitiesDiv.innerHTML = "";
+                }
+                if (data.suggestions) {
+                    suggestionsDiv.innerHTML = `
+                        <div><strong>Suggested Tests</strong><br>${(data.suggestions.tests || []).join('<br>') || '-'}</div>
+                        <div><strong>Suggested Medicines</strong><br>${(data.suggestions.medicines || []).join('<br>') || '-'}</div>
+                    `;
+                } else {
+                    suggestionsDiv.innerHTML = "";
+                }
+            }
+        });
+        await streamer.start();
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+    };
+
+    stopBtn.onclick = () => {
+        if (streamer) streamer.stop();
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+    };
+    </script>
+</body>
+</html>

@@ -33,9 +33,22 @@ def save_audio_to_tempfile(audio_bytes):
         return f.name
 
 async def transcribe_and_respond(audio_bytes, websocket):
+    # Simple mappings for demo purposes
+    disease_to_tests = {
+        "fever": ["CBC", "Blood culture"],
+        "diabetes": ["Fasting blood sugar", "HbA1c"],
+        "asthma": ["Spirometry", "Peak flow measurement"],
+        "cancer": ["Biopsy", "CT scan"],
+    }
+    disease_to_meds = {
+        "fever": ["paracetamol"],
+        "diabetes": ["metformin", "insulin"],
+        "asthma": ["albuterol", "inhaled corticosteroids"],
+        "cancer": ["chemotherapy", "immunotherapy"],
+    }
     if len(audio_bytes) == 0:
         print("No audio data received, skipping transcription.")
-        response = {"transcript": "No audio data received. Please try again.", "entities": {"diseases": [], "drugs": [], "symptoms": []}}
+        response = {"transcript": "No audio data received. Please try again.", "entities": {"diseases": [], "drugs": [], "symptoms": []}, "suggestions": {"tests": [], "medicines": []}}
         await websocket.send_json(response)
         return
     temp_audio_path = save_audio_to_tempfile(audio_bytes)
@@ -46,20 +59,29 @@ async def transcribe_and_respond(audio_bytes, websocket):
         print(f"Transcription result: {text}")
         # NLP entity extraction
         doc = nlp(text)
-        diseases = [ent.text for ent in doc.ents if ent.label_ == "DISEASE"]
+        diseases = [ent.text.lower() for ent in doc.ents if ent.label_ == "DISEASE"]
         drugs = [ent.text for ent in doc.ents if ent.label_ == "CHEMICAL"]
-        # scispaCy does not have a dedicated "SYMPTOM" label, so we leave it empty or use custom logic if needed
         symptoms = []
+        # Suggest tests and medicines for detected diseases
+        suggested_tests = []
+        suggested_meds = []
+        for disease in diseases:
+            suggested_tests.extend(disease_to_tests.get(disease, []))
+            suggested_meds.extend(disease_to_meds.get(disease, []))
         response = {
             "transcript": text,
             "entities": {
                 "diseases": diseases,
                 "drugs": drugs,
                 "symptoms": symptoms
+            },
+            "suggestions": {
+                "tests": list(set(suggested_tests)),
+                "medicines": list(set(suggested_meds))
             }
         }
     except Exception as e:
-        response = {"transcript": f"Transcription or NLP error: {e}", "entities": {"diseases": [], "drugs": [], "symptoms": []}}
+        response = {"transcript": f"Transcription or NLP error: {e}", "entities": {"diseases": [], "drugs": [], "symptoms": []}, "suggestions": {"tests": [], "medicines": []}}
         print(response["transcript"])
     finally:
         os.remove(temp_audio_path)
