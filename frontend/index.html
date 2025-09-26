@@ -9,6 +9,7 @@
     <button id="start">Start Recording</button>
     <button id="stop" disabled>Stop Recording</button>
     <div id="transcription"></div>
+    <div id="entities" style="display: flex; gap: 2em; margin-top: 1em;"></div>
     <script>
     // Modular, scalable continuous audio streaming
     class AudioStreamer {
@@ -28,7 +29,13 @@
             };
             this.ws.onmessage = (event) => {
                 console.log('Received from backend:', event.data);
-                if (this.onTranscription) this.onTranscription(event.data);
+                let data = event.data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (e) {
+                    // fallback to plain text
+                }
+                if (this.onTranscription) this.onTranscription(data);
                 this.ws.close();
             };
             this.ws.onerror = (event) => {
@@ -75,12 +82,29 @@
     const startBtn = document.getElementById('start');
     const stopBtn = document.getElementById('stop');
     const transcriptionDiv = document.getElementById('transcription');
+    const entitiesDiv = document.getElementById('entities');
     let streamer = null;
+
 
     startBtn.onclick = async () => {
         transcriptionDiv.innerText = "";
-        streamer = new AudioStreamer('ws://localhost:8000/ws/audio', (text) => {
-            transcriptionDiv.innerText = text || 'No transcription received.';
+        entitiesDiv.innerHTML = "";
+        streamer = new AudioStreamer('ws://localhost:8000/ws/audio', (data) => {
+            if (typeof data === 'string') {
+                transcriptionDiv.innerText = data || 'No transcription received.';
+                entitiesDiv.innerHTML = "";
+            } else {
+                transcriptionDiv.innerText = data.transcript || 'No transcription received.';
+                if (data.entities) {
+                    entitiesDiv.innerHTML = `
+                        <div><strong>Diseases</strong><br>${(data.entities.diseases || []).join('<br>') || '-'}</div>
+                        <div><strong>Drugs</strong><br>${(data.entities.drugs || []).join('<br>') || '-'}</div>
+                        <div><strong>Symptoms</strong><br>${(data.entities.symptoms || []).join('<br>') || '-'}</div>
+                    `;
+                } else {
+                    entitiesDiv.innerHTML = "";
+                }
+            }
         });
         await streamer.start();
         startBtn.disabled = true;

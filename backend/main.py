@@ -8,8 +8,10 @@ import os
 
 import tempfile
 import os
+
 import whisper
 import json
+import spacy
 
 app = FastAPI()
 
@@ -21,7 +23,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 model = whisper.load_model("base")
+nlp = spacy.load("en_ner_bc5cdr_md")
 
 def save_audio_to_tempfile(audio_bytes):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as f:
@@ -31,8 +35,8 @@ def save_audio_to_tempfile(audio_bytes):
 async def transcribe_and_respond(audio_bytes, websocket):
     if len(audio_bytes) == 0:
         print("No audio data received, skipping transcription.")
-        text = "No audio data received. Please try again."
-        await websocket.send_text(text)
+        response = {"transcript": "No audio data received. Please try again.", "entities": {"diseases": [], "drugs": [], "symptoms": []}}
+        await websocket.send_json(response)
         return
     temp_audio_path = save_audio_to_tempfile(audio_bytes)
     print(f"Saved audio to {temp_audio_path}, size: {len(audio_bytes)} bytes")
@@ -40,12 +44,26 @@ async def transcribe_and_respond(audio_bytes, websocket):
         result = model.transcribe(temp_audio_path)
         text = result.get("text", "")
         print(f"Transcription result: {text}")
+        # NLP entity extraction
+        doc = nlp(text)
+        diseases = [ent.text for ent in doc.ents if ent.label_ == "DISEASE"]
+        drugs = [ent.text for ent in doc.ents if ent.label_ == "CHEMICAL"]
+        # scispaCy does not have a dedicated "SYMPTOM" label, so we leave it empty or use custom logic if needed
+        symptoms = []
+        response = {
+            "transcript": text,
+            "entities": {
+                "diseases": diseases,
+                "drugs": drugs,
+                "symptoms": symptoms
+            }
+        }
     except Exception as e:
-        text = f"Transcription error: {e}"
-        print(text)
+        response = {"transcript": f"Transcription or NLP error: {e}", "entities": {"diseases": [], "drugs": [], "symptoms": []}}
+        print(response["transcript"])
     finally:
         os.remove(temp_audio_path)
-    await websocket.send_text(text)
+    await websocket.send_json(response)
 
 @app.websocket("/ws/audio")
 async def websocket_endpoint(websocket: WebSocket):
