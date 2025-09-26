@@ -26,59 +26,123 @@ const DashboardButton = ({ children, className, onClick, style }) => (
 );
 
 const Dashboard = ({ onLogout }) => {
-  const transcription = [
-    { speaker: "Doctor", text: "How are you feeling today? I recommend taking Paracetamol." },
-    { speaker: "Patient", text: "I have been experiencing a dull Headache and a slight Fever." },
-    { speaker: "Doctor", text: "Noted. Any medications currently?" },
-    { speaker: "Patient", text: "Yes, I’ve been taking Paracetamol." },
-  ];
+  const [isRecording, setIsRecording] = React.useState(false);
+  const [transcript, setTranscript] = React.useState("");
+  const [entities, setEntities] = React.useState({ diseases: [], drugs: [], symptoms: [] });
+  const [suggestions, setSuggestions] = React.useState({ tests: [], medicines: [] });
+  const [mediaRecorder, setMediaRecorder] = React.useState(null);
+  const wsRef = React.useRef(null);
 
-  const symptoms = ["Headache", "Fever"];
-  const conditions = ["Migraine", "Viral"];
-  const prescriptions = [{ name: "Paracetamol", dosage: "500mg", frequency: "Twice a day" }];
+  // Start audio recording and WebSocket
+  const startSession = async () => {
+    setTranscript("");
+    setEntities({ diseases: [], drugs: [], symptoms: [] });
+    setSuggestions({ tests: [], medicines: [] });
+    setIsRecording(true);
+    const ws = new window.WebSocket("ws://localhost:8000/ws/audio");
+    ws.binaryType = "arraybuffer";
+    wsRef.current = ws;
+    ws.onmessage = (event) => {
+      let data = event.data;
+      try { data = JSON.parse(event.data); } catch (e) {}
+      setTranscript(data.transcript || "");
+      setEntities(data.entities || { diseases: [], drugs: [], symptoms: [] });
+      setSuggestions(data.suggestions || { tests: [], medicines: [] });
+      setIsRecording(false);
+      if (mediaRecorder) mediaRecorder.stream.getTracks().forEach(track => track.stop());
+    };
+    ws.onerror = (event) => { setIsRecording(false); };
+    ws.onclose = () => { setIsRecording(false); };
 
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    let mimeType = 'audio/webm;codecs=opus';
+    if (!window.MediaRecorder.isTypeSupported(mimeType)) mimeType = 'audio/webm';
+    const recorder = new window.MediaRecorder(stream, { mimeType });
+    setMediaRecorder(recorder);
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0 && ws.readyState === window.WebSocket.OPEN) {
+        e.data.arrayBuffer().then(buffer => ws.send(buffer));
+      }
+    };
+    recorder.onstop = () => {
+      if (ws.readyState === window.WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'end' }));
+      }
+    };
+    recorder.start(250);
+  };
+
+  // Stop recording
+  const stopSession = () => {
+    if (mediaRecorder && isRecording) {
+      mediaRecorder.stop();
+      setIsRecording(false);
+    }
+  };
+
+  // Use backend entities and suggestions for left panel
   return (
     <div className="dashboard-container">
-      {/* Left Panel */}
+
+      {/* Left Panel - Dynamic from backend */}
       <div className="dashboard-left">
+        <div className="dashboard-section">
+          <Collapsible>
+            <CollapsibleTrigger className="dashboard-trigger" style={{ color: "#2DD4BF" }}>
+              Diseases �
+            </CollapsibleTrigger>
+            <CollapsibleContent style={{ display: "flex", gap: "0.75rem" }}>
+              {entities.diseases.length ? entities.diseases.map((d, idx) => (
+                <span key={idx} className="dashboard-tag">{d}</span>
+              )) : <span className="dashboard-tag">-</span>}
+            </CollapsibleContent>
+          </Collapsible>
+        </div>
+        <div className="dashboard-section">
+          <Collapsible>
+            <CollapsibleTrigger className="dashboard-trigger" style={{ color: "#2DD4BF" }}>
+              Drugs �
+            </CollapsibleTrigger>
+            <CollapsibleContent style={{ display: "flex", gap: "0.75rem" }}>
+              {entities.drugs.length ? entities.drugs.map((d, idx) => (
+                <span key={idx} className="dashboard-tag">{d}</span>
+              )) : <span className="dashboard-tag">-</span>}
+            </CollapsibleContent>
+          </Collapsible>
+        </div>
         <div className="dashboard-section">
           <Collapsible>
             <CollapsibleTrigger className="dashboard-trigger" style={{ color: "#2DD4BF" }}>
               Symptoms 🩺
             </CollapsibleTrigger>
             <CollapsibleContent style={{ display: "flex", gap: "0.75rem" }}>
-              {symptoms.map((s, idx) => (
+              {entities.symptoms.length ? entities.symptoms.map((s, idx) => (
                 <span key={idx} className="dashboard-tag">{s}</span>
-              ))}
+              )) : <span className="dashboard-tag">-</span>}
             </CollapsibleContent>
           </Collapsible>
         </div>
-
         <div className="dashboard-section">
           <Collapsible>
             <CollapsibleTrigger className="dashboard-trigger" style={{ color: "#2DD4BF" }}>
-              Conditions 🔎
+              Suggested Tests 🧪
             </CollapsibleTrigger>
-            <CollapsibleContent style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-              {conditions.map((c, idx) => (
-                <div key={idx} className="dashboard-item">{c}</div>
-              ))}
+            <CollapsibleContent style={{ display: "flex", gap: "0.75rem" }}>
+              {suggestions.tests.length ? suggestions.tests.map((t, idx) => (
+                <span key={idx} className="dashboard-tag">{t}</span>
+              )) : <span className="dashboard-tag">-</span>}
             </CollapsibleContent>
           </Collapsible>
         </div>
-
         <div className="dashboard-section">
           <Collapsible>
             <CollapsibleTrigger className="dashboard-trigger" style={{ color: "#2DD4BF" }}>
-              Prescriptions 💊
+              Suggested Medicines 💊
             </CollapsibleTrigger>
-            <CollapsibleContent style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-              {prescriptions.map((p, idx) => (
-                <div key={idx} className="dashboard-item">
-                  <strong>{p.name}</strong><br />
-                  <span style={{ fontSize: "0.85rem", color: "#9CA3AF" }}>{p.dosage}, {p.frequency}</span>
-                </div>
-              ))}
+            <CollapsibleContent style={{ display: "flex", gap: "0.75rem" }}>
+              {suggestions.medicines.length ? suggestions.medicines.map((m, idx) => (
+                <span key={idx} className="dashboard-tag">{m}</span>
+              )) : <span className="dashboard-tag">-</span>}
             </CollapsibleContent>
           </Collapsible>
         </div>
@@ -89,26 +153,32 @@ const Dashboard = ({ onLogout }) => {
         <div className="live-header">
           <h2>Live Transcription</h2>
           <div style={{ display: 'flex', gap: '1rem' }}>
-             <DashboardButton className="dashboard-button start-session-button">Start Session</DashboardButton>
-             <DashboardButton className="dashboard-button logout-button" onClick={onLogout}>Logout</DashboardButton>
+            <DashboardButton className="dashboard-button start-session-button" onClick={startSession} disabled={isRecording}>
+              {isRecording ? "Recording..." : "Start Session"}
+            </DashboardButton>
+            <DashboardButton className="dashboard-button logout-button" onClick={onLogout}>Logout</DashboardButton>
+            {isRecording && (
+              <DashboardButton className="dashboard-button stop-session-button" onClick={stopSession} style={{ background: '#ef4444', color: 'white' }}>
+                Stop
+              </DashboardButton>
+            )}
           </div>
         </div>
 
         <div className="transcription-body">
-          {transcription.map((line, idx) => (
-            <p key={idx} className="transcription-text">
-              <span className={line.speaker === "Doctor" ? "transcription-speaker-doctor" : "transcription-speaker-patient"}>
-                {line.speaker}:
-              </span>{" "}
-              {line.text.split(" ").map((word, wIdx) => {
-                const cleanWord = word.replace(/[.,/#!$%^&*;:{}=\-_`~()]/g,"");
-                const isMedicalTerm = symptoms.includes(cleanWord) || conditions.includes(cleanWord) || prescriptions.some((p) => p.name === cleanWord);
-                return (
-                  <span key={wIdx} className={isMedicalTerm ? "medical-term" : ""}>{word} </span>
-                );
-              })}
-            </p>
-          ))}
+          <h3>Transcript</h3>
+          <div>{transcript || <span style={{ color: '#888' }}>No transcription yet.</span>}</div>
+          <h3>Entities</h3>
+          <div style={{ display: 'flex', gap: '2em' }}>
+            <div><strong>Diseases</strong><br />{entities.diseases.length ? entities.diseases.join(', ') : '-'}</div>
+            <div><strong>Drugs</strong><br />{entities.drugs.length ? entities.drugs.join(', ') : '-'}</div>
+            <div><strong>Symptoms</strong><br />{entities.symptoms.length ? entities.symptoms.join(', ') : '-'}</div>
+          </div>
+          <h3>Suggestions</h3>
+          <div style={{ display: 'flex', gap: '2em' }}>
+            <div><strong>Tests</strong><br />{suggestions.tests.length ? suggestions.tests.join(', ') : '-'}</div>
+            <div><strong>Medicines</strong><br />{suggestions.medicines.length ? suggestions.medicines.join(', ') : '-'}</div>
+          </div>
         </div>
       </div>
     </div>
