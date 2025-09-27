@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Live Whisper Test (Recorder.js)</title>
+  <script src="/static/js/recorder.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background: #181818; color: #eee; }
+    #transcript { margin-top: 1em; font-size: 1.2em; background: #222; padding: 1em; border-radius: 8px; }
+    button { margin: 0.5em; padding: 0.5em 1em; font-size: 1em; }
+  </style>
+</head>
+<body>
+  <h2>Live Whisper Test (Recorder.js WAV Chunks)</h2>
+  <button id="startBtn">Start Recording</button>
+  <button id="stopBtn" disabled>Stop Recording</button>
+  <div id="transcript">Transcript will appear here...</div>
+  <script>
+    let rec, ws;
+    let context;
+    document.getElementById('startBtn').onclick = async function() {
+      this.disabled = true;
+      document.getElementById('stopBtn').disabled = false;
+      context = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const input = context.createMediaStreamSource(stream);
+      rec = new Recorder(input, { numChannels: 1 });
+      ws = new WebSocket('ws://localhost:8000/ws/transcribe');
+      ws.onmessage = function(e) {
+        try {
+          const data = JSON.parse(e.data);
+          document.getElementById('transcript').textContent =
+            (data.transcript || '') + '\nEntities: ' + JSON.stringify(data.entities) + '\nSuggestions: ' + JSON.stringify(data.suggestions);
+        } catch {}
+      };
+      ws.onclose = ws.onerror = function() {
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
+      };
+      rec.record();
+      window._recInterval = setInterval(function() {
+        rec.exportWAV(function(blob) {
+          blob.arrayBuffer().then(buf => {
+            if (ws.readyState === 1) ws.send(buf);
+          });
+          rec.clear();
+        });
+      }, 2000);
+    };
+    document.getElementById('stopBtn').onclick = function() {
+      this.disabled = true;
+      document.getElementById('startBtn').disabled = false;
+      if (rec) rec.stop();
+      clearInterval(window._recInterval);
+      if (ws && ws.readyState === 1) ws.close();
+    };
+  </script>
+</body>
+</html>
